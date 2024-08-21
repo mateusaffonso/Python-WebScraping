@@ -1,23 +1,15 @@
-import requests
 from bs4 import BeautifulSoup
 import re
-
+from playwright.sync_api import sync_playwright, Playwright
+import csv
 url = 'https://www.trabalhabrasil.com.br/vagas-empregos-em-rio-de-janeiro-rj'
 
-headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
 
-
-
-def request(url, headers):
-  global site
-  site = requests.get(url, headers=headers)
-  #status = site.status_code
-  #print(status)
-  return site
 
 def html_formated(site):
-  formated = BeautifulSoup(site, 'html.parser')
-  return formated
+    import pdb; pdb.set_trace()
+    formated = BeautifulSoup(site, 'html.parser')
+    return formated
 
 
 def find_all_class(formated, tag = str, class_content = str):
@@ -30,7 +22,7 @@ def create_titlesJobs_list(formated):
   return list_jobs
 
 
-def scrapper_regex(formated):
+def scraper_regex(formated):
   new_list = []
   for i in formated:
     result_search = re.search(r'.*para (.*) na empresa (.*) em', i)
@@ -42,3 +34,15 @@ def scrapper_regex(formated):
         new_list.append(item)
   return new_list
 
+def create_write_csv(name, colums):
+  with open(f'{name}.csv', 'w', newline='') as csvfile:
+    writer = csv.DictWriter(csvfile, fieldnames=colums)
+    writer.writeheader()
+
+def write_in_csv(name, colums, data):
+  with open(f'{name}.csv', 'a', newline='') as csvfile:
+    writer = csv.DictWriter(csvfile, fieldnames=colums)
+    if(type(data) != list):
+      writer.writerow(data)
+    for item in data:
+        writer.writerow(item)

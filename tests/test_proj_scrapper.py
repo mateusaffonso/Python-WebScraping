@@ -1,4 +1,4 @@
-from proj_scrapper import __version__
+from proj_scraper import __version__
 
 
 def test_version():

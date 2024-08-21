@@ -1,7 +1,7 @@
 __version__ = '0.1.0'
 
 from bs4 import BeautifulSoup
-from requisicoes import url, headers, request, content, html_formated, find_all_class, create_titlesJobs_list, scrapper_regex
+from proj_scraper.trabalha_brasil.requisicoes import url, headers, request, html_formated, find_all_class, create_titlesJobs_list, scrapper_regex
 [headers, url] = headers, url
 
 
@@ -9,7 +9,7 @@ site = request(url, headers)
 
 print(site)
 
-contentInSite = content(site)
+contentInSite = site.content
 #print(contentInSite)
 
 html_formated = html_formated(contentInSite)
