@@ -25,11 +25,13 @@ def create_titlesJobs_list(formated):
 def scraper_regex(formated):
   new_list = []
   for i in formated:
-    result_search = re.search(r'.*para (.*) na empresa (.*) em', i)
+    result_search = re.search(r'.*para (.*) na empresa (.*) em (.*) / (.*)', i)
     if result_search:
         item = {
           'job': result_search.group(1),
-          'company': result_search.group(2)
+          'company': result_search.group(2),
+          'city': result_search.group(3),
+          'state': result_search.group(4)
         }
         new_list.append(item)
   return new_list
