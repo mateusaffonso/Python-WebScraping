@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import time
-from proj_scraper.lib.web_scraper import PlaywrightWebScraper
+from lib.web_scraper import PlaywrightWebScraper
 
 
 def _get_last_saved_page_number(output_folder: str) -> int:

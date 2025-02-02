@@ -11,6 +11,7 @@ requests = "^2.32.3"
 beautifulsoup4 = "^4.12.3"
 playwright = "^1.45.1"
 numpy = "^2.1.0"
+typer = "^0.15.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

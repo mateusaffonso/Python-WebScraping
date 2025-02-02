@@ -1,6 +1,5 @@
 from enum import Enum
 from playwright.sync_api import sync_playwright
-from playwright import Browser, Context
 
 
 class BrowserType(Enum):
@@ -40,7 +39,7 @@ class PlaywrightWebScraper(BaseWebScraper):
         self.playwright = sync_playwright()
         self.browser = self._generate_playwright_browser(self.playwright, browser_type)
 
-    def _generate_playwright_browser(self, playwright, browser_type: BrowserType = BrowserType.FIREFOX) -> Browser:
+    def _generate_playwright_browser(self, playwright, browser_type: BrowserType = BrowserType.FIREFOX):
         webkit = None
         match browser_type:
             case BrowserType.FIREFOX:
