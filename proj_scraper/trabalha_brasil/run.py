@@ -35,7 +35,6 @@ def run(playwright: Playwright):
         dataset.extend(regex_JobsList)
         write_in_csv('dataset_trabalha_brasil', colums, regex_JobsList)
         write_in_csv('dataset_pages_reader', ['page'], [{'page': i}])
-        #import pdb; pdb.set_trace()
         i += 1
         s = np.random.normal(media, std)
         time.sleep(s)
@@ -44,7 +43,6 @@ def run(playwright: Playwright):
         time.sleep(s)
         formated = BeautifulSoup(body, 'html.parser')
         formated_class = formated.find('nav', 'jg__container').find_all('a')
-
 
     browser.close()
     return dataset
