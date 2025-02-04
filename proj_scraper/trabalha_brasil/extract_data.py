@@ -11,13 +11,13 @@ def _extract_company(job_data_block: str) -> str:
     return company.text
 
 
-def _extract_city(job_data_block: str) -> str:
-    city = job_data_block.findall("strong")[0]
+def _extract_location(job_data_block: str) -> str:
+    city = job_data_block.find_all("strong")[0]
     return city.text
 
 
-def _extract_state(job_data_block: str) -> str:
-    state = job_data_block.findall("strong")[1]
+def _extract_job_description(job_data_block: str) -> str:
+    state = job_data_block.find_all("p")[0]
     return state.text
 
 
@@ -30,19 +30,17 @@ def extract_page_data(page: str) -> list[dict]:
     extracted_jobs = []
 
     for job_block in jobs_blocks:
-        job_data_block = job_block.find(class_="jobCard")
-        job_header = job_data_block.find(class_="jobHeader")
-        job_body = job_data_block.find(class_="jobBody")
-
+        job_header = job_block.find(class_="jobHeader")
+        job_body = job_block.find(class_="jobBody")
         title = _extract_title(job_header)
         company = _extract_company(job_header)
-        city = _extract_city(job_body)
-        state = _extract_state(job_body)
+        location = _extract_location(job_body)
+        description = _extract_job_description(job_body)
         job_doc = {
             "title": title,
             "company": company,
-            "city": city,
-            "state": state,
+            "location": location,
+            "description": description,
         }
         extracted_jobs.append(job_doc)
     return extracted_jobs

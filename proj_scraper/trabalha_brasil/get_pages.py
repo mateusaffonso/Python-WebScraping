@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import time
-from lib.web_scraper import PlaywrightWebScraper
+from lib.web_scraper import PlaywrightWebScraper, BrowserType
 
 
 def _get_last_saved_page_number(output_folder: str) -> int:
@@ -17,7 +17,7 @@ def _get_last_saved_page_number(output_folder: str) -> int:
 def get_pages(base_url: str, output_folder: str, sleep_mean=None, sleep_std=None, log_num_pages=10) -> None:
     if not os.path.isdir(output_folder):
         os.mkdir(output_folder)
-    scraper = PlaywrightWebScraper()
+    scraper = PlaywrightWebScraper(browser_type=BrowserType.FIREFOX)
     page_number = _get_last_saved_page_number(output_folder) + 1
     while True:
         full_page_url = f"{base_url}?pagina={page_number}"
