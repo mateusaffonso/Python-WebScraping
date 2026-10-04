@@ -38,6 +38,10 @@ class BaseWebScraper:
     def get_page(self) -> str:
         pass
 
+    def get_html(self, url: str) -> str:
+        """Returns the full HTML document (including <head>) of the given URL."""
+        pass
+
     def close_down(self):
         pass
 
@@ -69,17 +73,29 @@ class RequestsWebScraper(BaseWebScraper):
         Exception
             If there is an error while fetching the web page.
     """
-    def __init__(self):
-        pass
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+    }
+
+    def __init__(self, timeout: float = 30):
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update(self.HEADERS)
 
     def get_page(self, url: str) -> str:
-       
+        return self.get_html(url)
 
+    def get_html(self, url: str) -> str:
         try:
-            response = requests.get(url)
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
             return response.text
         except Exception as e:
             raise Exception(f"Error getting page: {e}")
+
+    def close_down(self):
+        self.session.close()
 
 
 class PlaywrightWebScraper(BaseWebScraper):
@@ -177,3 +193,25 @@ class PlaywrightWebScraper(BaseWebScraper):
             return body
         except Exception as e:
             raise Exception(f"Error getting page: {e}")
+
+    def get_html(self, url: str) -> str:
+        """
+        Fetches the full HTML document (including <head>, where structured
+        data such as JSON-LD may live) of the specified URL.
+        """
+        try:
+            self.page.goto(url, wait_until="domcontentloaded")
+            return self.page.content()
+        except Exception as e:
+            raise Exception(f"Error getting page: {e}")
+
+
+def create_scraper(engine: str = "playwright") -> BaseWebScraper:
+    """
+    Creates a scraper by name: "playwright" (Firefox headless) or "requests".
+    """
+    if engine == "playwright":
+        return PlaywrightWebScraper(browser_type=BrowserType.FIREFOX)
+    if engine == "requests":
+        return RequestsWebScraper()
+    raise ValueError(f"Invalid engine: {engine}")

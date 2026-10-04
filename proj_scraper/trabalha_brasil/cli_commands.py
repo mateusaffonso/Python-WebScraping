@@ -1,67 +1,80 @@
-import os
+from datetime import date
+from typing import Optional
+
 import typer
+
+from trabalha_brasil.get_details import get_details, update_jobs_from_listings
 from trabalha_brasil.get_pages import get_pages
-from trabalha_brasil.extract_data import extract_page_data
+from trabalha_brasil.storage import JOBS_CSV, listings_folder
 
 app = typer.Typer()
 
+BASE_URL = "https://www.trabalhabrasil.com.br/vagas-de-emprego"
+
+DataFolder = typer.Option("./data", "--data-folder", "-d", help="Folder where the pages and vagas.csv are saved (e.g. a Google Drive folder).")
+SleepMean = typer.Option(2.0, help="Mean pause between requests, in seconds.")
+SleepStd = typer.Option(0.5, help="Standard deviation of the pause, in seconds.")
+Engine = typer.Option("playwright", help='"playwright" (Firefox headless) or "requests".')
+
 
 @app.command("get-pages")
-def get_trabalha_brasil_pages():
+def get_trabalha_brasil_pages(
+    data_folder: str = DataFolder,
+    max_pages: Optional[int] = typer.Option(None, help="Maximum number of new listing pages in this run (default: until the end)."),
+    run_date: str = typer.Option(date.today().isoformat(), help="Collection day (YYYY-MM-DD). Pages go to <data-folder>/listings/<run-date>/."),
+    sleep_mean: float = SleepMean,
+    sleep_std: float = SleepStd,
+    engine: str = Engine,
+    log_num_pages: int = typer.Option(1, help="Print a message every N pages."),
+):
     """
-    Command to scrape job listing pages from the Trabalha Brasil website.
+    Downloads the job listing pages of the Trabalha Brasil website.
 
-    This function uses the `get_pages` function to scrape job listings from the
-    Trabalha Brasil website and save them to the specified output folder. The
-    function is registered as a command with the name 'get-pages'.
-
-    Parameters:
-    None
-
-    Returns:
-    None
-
-    Notes:
-    - The base URL for the job listings is "https://www.trabalhabrasil.com.br/vagas-empregos".
-    - The output folder for the scraped data is "./data/".
-    - The mean sleep time between requests is 2 seconds.
-    - The standard deviation of the sleep time is 0.5 seconds.
-    - The number of pages to log is 1.
+    Pages are saved to <data-folder>/listings/<run-date>/page_N.html. Running it
+    again on the same day resumes after the last saved page.
     """
-    base_url = "https://www.trabalhabrasil.com.br/vagas-empregos"
-    output_folder = "./data/"
-    sleep_mean = 2
-    sleep_std = 0.5
-    log_num_pages = 1
-    get_pages(base_url, output_folder, sleep_mean, sleep_std, log_num_pages)
+    get_pages(
+        BASE_URL,
+        listings_folder(data_folder, run_date),
+        sleep_mean=sleep_mean,
+        sleep_std=sleep_std,
+        log_num_pages=log_num_pages,
+        max_pages=max_pages,
+        engine=engine,
+    )
 
 
 @app.command("extract-data")
-def extract_trabalha_brasil_data():
+def extract_trabalha_brasil_data(data_folder: str = DataFolder):
     """
-    Extracts job data from HTML files located in the './data' directory.
-
-    This function iterates over all files in the './data' directory, reads the content of each file,
-    and processes the HTML content to extract job data using the `extract_page_data` function.
-    The extracted job data is then printed to the console.
-
-    Note:
-        The function assumes that the files in the './data' directory are HTML files containing job listings.
-
-    Raises:
-        FileNotFoundError: If the './data' directory does not exist or if any of the files cannot be found.
-        IOError: If there is an error reading any of the files.
-
-    Example:
-        >>> extract_trabalha_brasil_data()
-        Processing file example.html
-        [{'title': 'Software Engineer', 'company': 'Tech Company', 'location': 'City, Country', 'salary': '1000-2000'}]
-        --------------------------------------------------
+    Extracts the jobs of all saved listing pages into <data-folder>/vagas.csv
+    (one row per job, keeping the details already collected).
     """
-    for file in os.listdir("./data"):
-        print(f"Processing file {file}")
-        with open(f"./data/{file}") as f:
-            page = f.read()
-            jobs = extract_page_data(page)
-            print(jobs)
-            print("-" * 50)
+    jobs = update_jobs_from_listings(data_folder)
+    print(f"{len(jobs)} job(s) saved in {data_folder}/{JOBS_CSV}")
+
+
+@app.command("get-details")
+def get_trabalha_brasil_details(
+    data_folder: str = DataFolder,
+    max_jobs: Optional[int] = typer.Option(None, help="Maximum number of job pages to visit in this run."),
+    recheck: bool = typer.Option(False, "--recheck", help="Also revisit open jobs to detect the ones that were closed."),
+    sleep_mean: float = SleepMean,
+    sleep_std: float = SleepStd,
+    engine: str = Engine,
+):
+    """
+    Visits each job page to collect its publication date, salary range and full
+    description, and (with --recheck) detects closed jobs. Updates vagas.csv.
+    """
+    jobs = get_details(
+        data_folder,
+        max_jobs=max_jobs,
+        recheck=recheck,
+        sleep_mean=sleep_mean,
+        sleep_std=sleep_std,
+        engine=engine,
+    )
+    with_details = sum(1 for job in jobs.values() if job.get("details_fetched_at"))
+    closed = sum(1 for job in jobs.values() if job.get("closed_detected_at"))
+    print(f"{len(jobs)} job(s) in {data_folder}/{JOBS_CSV}: {with_details} with details, {closed} detected as closed")
