@@ -78,7 +78,8 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq rclone
           mkdir -p ~/.config/rclone
           printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
-          rclone lsf "$REMOTE" --max-depth 1
+          # Só testa a conexão: o repositório é público e os logs também, então não listamos arquivos.
+          rclone lsf "$REMOTE" --max-depth 1 > /dev/null && echo "Conexão com o Drive OK."
 
       - name: Baixa o vagas.csv do Drive
         if: env.HAS_DRIVE == 'true' && env.TEST_RUN != 'true'
@@ -143,14 +144,13 @@ jobs:
           rclone copyto "$DATA/coleta.log" "${REMOTE}logs/${DAY}_${GITHUB_RUN_ID}.log"
           echo "Enviado para o Drive."
 
-      - name: Guarda uma cópia no GitHub (7 dias)
-        if: always()
+      # Repositório público: arquivos de execução podem ser baixados por qualquer pessoa.
+      # Por isso só o log é guardado (sem vagas.csv nem páginas), e só em modo teste ou se algo falhar.
+      - name: Guarda o log no GitHub (7 dias)
+        if: failure() || env.HAS_DRIVE != 'true' || env.TEST_RUN == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: coleta-${{ github.run_id }}
-          path: |
-            coleta/vagas.csv
-            coleta/coleta.log
-            coleta/*.tar.gz
+          name: log-${{ github.run_id }}
+          path: coleta/coleta.log
           retention-days: 7
           if-no-files-found: ignore

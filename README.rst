@@ -102,8 +102,9 @@ cheap and new jobs are seen within about 3 hours of appearing. Each open job is 
 most once a day, so closing dates (``closed_detected_at``) have a precision of about 1 day.
 Each run downloads ``vagas.csv`` from the Google Drive folder,
 collects, checks that ``vagas.csv`` did not shrink and uploads it back, together with the day's
-listing pages (``listings_compactadas/``) and the log (``logs/``). A copy is also kept as a
-GitHub artifact for 7 days.
+listing pages (``listings_compactadas/``) and the log (``logs/``). The repository is public, so its
+Actions logs and artifacts are public too: the workflow never lists the Drive folder and keeps only
+the log as an artifact (never ``vagas.csv``).
 
 Setup (once), on a computer with a browser:
 
