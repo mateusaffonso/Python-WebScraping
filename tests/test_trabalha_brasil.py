@@ -215,3 +215,38 @@ def test_daily_run_and_salary_estimated(tmp_path, monkeypatch):
     assert jobs["13687383"]["salary_estimated"] == "True"
     assert jobs["13687383"]["first_seen"] == "2026-10-05"
     assert jobs["13684778"]["closed_detected_at"] != ""
+
+
+def test_daily_runs_start_from_page_one_without_overwriting(tmp_path, monkeypatch):
+    data = str(tmp_path)
+    fake = FakeScraper({"pagina=1": _listing(1, 2), "pagina=2": _listing(3)})
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_details_module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_pages_module.time, "sleep", lambda s: None)
+    import trabalha_brasil.daily as daily_module
+
+    stamps = iter(["010000", "040000"])
+
+    class FakeDatetime:
+        @staticmethod
+        def now():
+            class _Now:
+                def strftime(self, fmt):
+                    return next(stamps)
+
+            return _Now()
+
+    monkeypatch.setattr(daily_module, "datetime", FakeDatetime)
+    daily_module.run_daily(data, max_pages=5, stop_after_known_pages=1, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+    fake.pages["pagina=1"] = _listing(4, 1)  # a new job (4) arrived at the top
+    daily_module.run_daily(data, max_pages=5, stop_after_known_pages=1, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+
+    day = listings_folder(data, "2026-10-05")
+    assert sorted(os.listdir(day)) == ["run_010000", "run_040000"]
+    assert len(os.listdir(os.path.join(day, "run_010000"))) == 2  # first run pages kept
+    assert set(load_jobs(data)) == {"1", "2", "3", "4"}
+    # Second run started from page 1 again (found job 4) and stopped at the known page 2.
+    assert [u for u in fake.requested if "pagina" in u][-2:] == [
+        "https://www.trabalhabrasil.com.br/vagas-de-emprego?Ordenacao=2&pagina=1",
+        "https://www.trabalhabrasil.com.br/vagas-de-emprego?Ordenacao=2&pagina=2",
+    ]

@@ -1,4 +1,5 @@
-from datetime import date
+import os
+from datetime import date, datetime
 
 from trabalha_brasil.get_details import get_details
 from trabalha_brasil.get_pages import BASE_URL, get_pages
@@ -19,7 +20,9 @@ def run_daily(
     """
     One day of incremental collection, meant to be scheduled (e.g. GitHub Actions):
 
-    1. Listing ordered by "Mais recentes": new pages go to listings/<run_date>/.
+    1. Listing ordered by "Mais recentes", always from page 1: pages go to
+       listings/<run_date>/run_<HHMMSS>/ (a new folder per run, so several runs
+       per day never overwrite each other).
        Stops after stop_after_known_pages pages in a row with no job outside
        vagas.csv (or at max_pages).
     2. Details (publication date, salary, description) of the new jobs (at most max_jobs).
@@ -34,9 +37,10 @@ def run_daily(
     print(f"== {run_date}: {len(known_job_ids)} job(s) already known")
 
     print("== 1/2 Listing (most recent first)")
+    run_folder = os.path.join(listings_folder(data_folder, run_date), "run_" + datetime.now().strftime("%H%M%S"))
     get_pages(
         BASE_URL,
-        listings_folder(data_folder, run_date),
+        run_folder,
         sleep_mean=sleep_mean,
         sleep_std=sleep_std,
         log_num_pages=10,

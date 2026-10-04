@@ -69,7 +69,7 @@ The CLI collects job postings from the Trabalha Brasil website
     poetry run python proj_scraper/run.py trabalha-brasil get-details --max-jobs 100
     poetry run python proj_scraper/run.py trabalha-brasil get-details --recheck
 
-- ``daily``: incremental collection meant to run once a day. Reads the listing ordered by
+- ``daily``: incremental collection meant to run several times a day. Reads the listing ordered by
   "Mais recentes" (``--order recent``) until it finds pages with only jobs already in
   ``vagas.csv``, collects the details of the new jobs and revisits open jobs to detect closings.
   ::
@@ -95,8 +95,12 @@ When the listing says "a combinar", the job page still brings a range (``salary_
 
 Automatic daily collection (GitHub Actions)
 -------------------------------------------
-``.github/workflows/coleta-diaria.yml`` runs ``daily`` every day at 06:17 (Brasília) on GitHub's
-servers, so the computer can be off. Each run downloads ``vagas.csv`` from the Google Drive folder,
+``.github/workflows/coleta-diaria.yml`` runs ``daily`` every 3 hours on GitHub's servers, so the
+computer can be off. Each run starts from page 1 of "Mais recentes" (pages saved in
+``listings/<day>/run_<HHMMSS>/``) and stops when it reaches jobs already known, so frequent runs are
+cheap and new jobs are seen within about 3 hours of appearing. Each open job is revisited at
+most once a day, so closing dates (``closed_detected_at``) have a precision of about 1 day.
+Each run downloads ``vagas.csv`` from the Google Drive folder,
 collects, checks that ``vagas.csv`` did not shrink and uploads it back, together with the day's
 listing pages (``listings_compactadas/``) and the log (``logs/``). A copy is also kept as a
 GitHub artifact for 7 days.

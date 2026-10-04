@@ -3,7 +3,7 @@ from datetime import datetime
 from lib.web_scraper import create_scraper
 from trabalha_brasil.extract_data import DETAIL_FIELDS, extract_job_details, extract_page_data
 from trabalha_brasil.get_pages import sleep_between_requests
-from trabalha_brasil.storage import list_listing_runs, list_page_files, listings_folder, load_jobs, save_jobs
+from trabalha_brasil.storage import list_listing_runs, list_page_files_recursive, listings_folder, load_jobs, save_jobs
 
 # Save vagas.csv every N visited jobs, so little is lost if the run is interrupted.
 SAVE_EVERY = 10
@@ -24,7 +24,7 @@ def update_jobs_from_listings(data_folder: str) -> dict[str, dict]:
     """
     jobs = load_jobs(data_folder)
     for run_date in list_listing_runs(data_folder):
-        for _, path in list_page_files(listings_folder(data_folder, run_date)):
+        for path in list_page_files_recursive(listings_folder(data_folder, run_date)):
             with open(path, encoding="utf-8") as f:
                 cards = extract_page_data(f.read())
             for card in cards:

@@ -3,6 +3,7 @@ Storage layout inside the data folder:
 
     <data_folder>/
         listings/<YYYY-MM-DD>/page_<N>.html   raw listing pages, one folder per collection day
+        listings/<YYYY-MM-DD>/run_<HHMMSS>/   pages of each run of the "daily" command
         vagas.csv                             one row per job (the main dataset)
 """
 
@@ -53,6 +54,15 @@ def list_page_files(folder: str) -> list[tuple[int, str]]:
         if match:
             pages.append((int(match.group(1)), os.path.join(folder, file_name)))
     return sorted(pages)
+
+
+def list_page_files_recursive(folder: str) -> list[str]:
+    """Returns the paths of every page_<N>.html in the folder and its subfolders (sorted)."""
+    paths = []
+    for root, dirs, _ in os.walk(folder):
+        dirs.sort()
+        paths += [path for _, path in list_page_files(root)]
+    return paths
 
 
 def list_listing_runs(data_folder: str) -> list[str]:

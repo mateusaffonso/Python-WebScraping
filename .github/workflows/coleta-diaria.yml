@@ -1,4 +1,4 @@
-# Coleta diária automática das vagas do Trabalha Brasil.
+# Coleta automática das vagas do Trabalha Brasil (a cada 3 horas).
 #
 # Roda nos servidores do GitHub (o computador pode estar desligado):
 #   1. baixa o vagas.csv atual da pasta IC_scraper do Google Drive (rclone);
@@ -14,18 +14,22 @@ name: Coleta diária
 
 on:
   schedule:
-    - cron: "17 9 * * *" # todo dia às 09:17 UTC = 06:17 em Brasília
+    # A cada 3 horas (minuto 17 para fugir do pico do minuto 0). Cada rodada lê só as
+    # vagas novas (para nas já conhecidas), então rodar com frequência é barato e as
+    # vagas novas aparecem no vagas.csv em até ~3 h. Cada vaga aberta é revisitada no
+    # máximo 1x por dia (precisão do fechamento ≈ 1 dia).
+    - cron: "17 */3 * * *"
   workflow_dispatch:
     inputs:
       max_pages:
         description: "Máximo de páginas da listagem (15 vagas cada)"
-        default: "100"
+        default: "60"
       max_jobs:
         description: "Máximo de vagas novas para coletar detalhes"
-        default: "2000"
+        default: "1500"
       max_recheck:
         description: "Máximo de vagas abertas para revisitar"
-        default: "1000"
+        default: "400"
       test_run:
         description: "Modo teste (coleta pouco e não envia ao Drive)"
         type: boolean
@@ -45,16 +49,17 @@ permissions:
 jobs:
   coleta:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 170
     env:
       DATA: ${{ github.workspace }}/coleta
       # Remoto do rclone. Com root_folder_id = id da pasta IC_scraper, "drive:" é a própria pasta.
       REMOTE: ${{ vars.RCLONE_REMOTE || 'drive:' }}
       HAS_DRIVE: ${{ secrets.RCLONE_CONFIG != '' }}
       TEST_RUN: ${{ github.event_name == 'push' || inputs.test_run == true || secrets.RCLONE_CONFIG == '' }}
-      MAX_PAGES: ${{ inputs.max_pages || '100' }}
-      MAX_JOBS: ${{ inputs.max_jobs || '2000' }}
-      MAX_RECHECK: ${{ inputs.max_recheck || '1000' }}
+      # Por rodada (8 rodadas por dia). Pior caso ~ (60 + 1500 + 400) x 2,5 s ≈ 80 min.
+      MAX_PAGES: ${{ inputs.max_pages || '60' }}
+      MAX_JOBS: ${{ inputs.max_jobs || '1500' }}
+      MAX_RECHECK: ${{ inputs.max_recheck || '400' }}
     steps:
       - uses: actions/checkout@v4
 
