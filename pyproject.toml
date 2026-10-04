@@ -1,5 +1,6 @@
 [tool.poetry]
 name = "proj_scrapper"
+package-mode=false
 version = "0.1.0"
 description = ""
 authors = ["mateusaffonso <mateusana@dcc.ufrj.br>"]
@@ -9,8 +10,8 @@ python = "^3.10"
 requests = "^2.32.3"
 beautifulsoup4 = "^4.12.3"
 playwright = "^1.45.1"
-pytest = "^5.1"
 numpy = "^2.1.0"
+typer = "^0.15.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

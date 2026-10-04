@@ -1,15 +1,63 @@
-Como Utilizar
--------------
+Python Web Scraping Project
+===========================
 
-1. Instale as dependências do projeto executando o comando `poetry install`.
-2. Execute o arquivo `run.py` para iniciar o processo de scraping.
-3. Ajuste as configurações do projeto no arquivo `requisicoes.py`, como os websites a serem extraídos e os formatos de armazenamento dos dados.
-4. Verifique os resultados no diretório de saída definido no arquivo de configuração.
+Purpose
+-------
+This project is designed to perform web scraping tasks using Python. It extracts data from websites and processes it for various use cases such as data analysis, reporting, and more.
 
+Development Mode
+----------------
+To execute the project in development mode using Poetry, follow these steps:
 
-Usar ferramenta peewee (Transforma SQL em Python);
-Olhar para a class python e transformar em tabela
-Postgres ou SQLite -> instalar no ubunto SQLite
-migrations
+1. Install Poetry if you haven't already:
+    ```
+    curl -sSL https://install.python-poetry.org | python3 -
+    ```
 
-Book - junto vários e salva de uma vez;
+2. Navigate to the project directory:
+    ```
+    cd /home/fabricio/projects/Python-WebScraping
+    ```
+
+3. Install the project dependencies:
+    ```
+    poetry install
+    ```
+
+4. Run the project:
+    ```
+
+Deploying with Docker
+---------------------
+To deploy the project using Docker, follow these steps:
+
+1. Build the Docker image:
+    ```
+    docker build -t python-webscraping .
+    ```
+
+2. Run the Docker container:
+    ```
+    docker run -d -p 8000:8000 python-webscraping
+    ```
+
+CLI Commands
+------------
+The project includes a command-line interface (CLI) with the following main commands:
+
+- `scrape`: Initiates the web scraping process.
+  ```
+  poetry run python cli.py scrape
+  ```
+
+- `process`: Processes the scraped data.
+  ```
+  poetry run python cli.py process
+  ```
+
+- `report`: Generates a report from the processed data.
+  ```
+  poetry run python cli.py report
+  ```
+
+Make sure to replace `main.py` and `cli.py` with the actual entry points of your project if they differ.
