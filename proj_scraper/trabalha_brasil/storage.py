@@ -23,7 +23,14 @@ TRACKING_FIELDS = [
     "closed_detected_at",  # first time the job page said "A vaga foi encerrada"
 ]
 
-JOB_FIELDS = LISTING_FIELDS + TRACKING_FIELDS + DETAIL_FIELDS + ["closed"]
+DERIVED_FIELDS = [
+    "closed",  # job page said "A vaga foi encerrada" in the last visit
+    # True when the listing shows no salary ("a combinar") but the job page has a
+    # salary range: the range is an estimate made by the site, not the employer's offer.
+    "salary_estimated",
+]
+
+JOB_FIELDS = LISTING_FIELDS + TRACKING_FIELDS + DETAIL_FIELDS + DERIVED_FIELDS
 
 PAGE_FILE_PATTERN = re.compile(r"^page_(\d+)\.html$")
 
@@ -86,6 +93,8 @@ def save_jobs(data_folder: str, jobs: dict[str, dict]) -> str:
         writer = csv.DictWriter(f, fieldnames=JOB_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for job in jobs.values():
+            if job.get("details_fetched_at"):
+                job["salary_estimated"] = bool(job.get("salary_max")) and not job.get("salary")
             writer.writerow(job)
     os.replace(tmp_path, path)
     return path
