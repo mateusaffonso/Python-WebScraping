@@ -32,7 +32,7 @@ on:
         default: false
   push:
     branches: [feat/coleta-automatica]
-    paths: [".github/workflows/coleta-diaria.yml"]
+    paths: [".github/workflows/coleta-diaria.yml", "proj_scraper/**"]
 
 # Nunca duas coletas ao mesmo tempo (evita uma sobrescrever o vagas.csv da outra).
 concurrency:
