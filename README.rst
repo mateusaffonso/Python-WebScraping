@@ -69,6 +69,13 @@ The CLI collects job postings from the Trabalha Brasil website
     poetry run python proj_scraper/run.py trabalha-brasil get-details --max-jobs 100
     poetry run python proj_scraper/run.py trabalha-brasil get-details --recheck
 
+- ``daily``: incremental collection meant to run several times a day. Reads the listing ordered by
+  "Mais recentes" (``--order recent``) until it finds pages with only jobs already in
+  ``vagas.csv``, collects the details of the new jobs and revisits open jobs to detect closings.
+  ::
+
+    poetry run python proj_scraper/run.py trabalha-brasil daily --max-pages 100 --max-jobs 2000 --max-recheck 1000
+
 Use ``--help`` on any command to see all the options (``--sleep-mean``, ``--sleep-std``,
 ``--engine playwright|requests``...).
 
@@ -79,6 +86,53 @@ About the dates
   by the site (usually ``date_posted`` + 1 year) and should not be used as the closing date.
   The closing date is inferred: run ``get-details --recheck`` periodically and use
   ``closed_detected_at`` (precision = interval between runs).
+
+About the salary
+~~~~~~~~~~~~~~~~
+When the employer states a salary, ``salary_min`` is that value and ``salary_max`` is empty.
+When the listing says "a combinar", the job page still brings a range (``salary_min`` /
+``salary_max``) that is an estimate made by the site: those rows have ``salary_estimated = True``.
+
+Automatic daily collection (GitHub Actions)
+-------------------------------------------
+``.github/workflows/coleta-diaria.yml`` runs ``daily`` every 3 hours on GitHub's servers, so the
+computer can be off. Each run starts from page 1 of "Mais recentes" (pages saved in
+``listings/<day>/run_<HHMMSS>/``) and stops when it reaches jobs already known, so frequent runs are
+cheap and new jobs are seen within about 3 hours of appearing. Each open job is revisited at
+most once a day, so closing dates (``closed_detected_at``) have a precision of about 1 day.
+Each run downloads ``vagas.csv`` from the Google Drive folder,
+collects, checks that ``vagas.csv`` did not shrink and uploads it back, together with the day's
+listing pages (``listings_compactadas/``) and the log (``logs/``). The repository is public, so its
+Actions logs and artifacts are public too: the workflow never lists the Drive folder and keeps only
+the log as an artifact (never ``vagas.csv``).
+
+Setup (once), on a computer with a browser:
+
+1. Install rclone: https://rclone.org/install/ (macOS: ``brew install rclone``).
+2. Create the ``drive`` remote pointing to the Drive folder (log in with the account that owns it).
+   ``root_folder_id`` is the id at the end of the folder URL
+   (``https://drive.google.com/drive/folders/<id>``)::
+
+    rclone config create drive drive scope=drive root_folder_id=<id-da-pasta-IC_scraper>
+    rclone lsf drive:        # must list vagas.csv
+
+3. Save the remote configuration as a repository secret named ``RCLONE_CONFIG``
+   (GitHub > Settings > Secrets and variables > Actions > New repository secret), with the
+   output of::
+
+    rclone config show drive
+
+4. Run it once by hand: GitHub > Actions > "Coleta diária" > Run workflow.
+
+Notes:
+
+- Without the secret the workflow runs in test mode (2 pages, 5 jobs) and uploads nothing.
+- The secret gives access to the Google Drive of that account. Keep it only in the repository
+  secrets and never commit ``rclone.conf``.
+- Do not run the collection from Colab at the same time as the scheduled run: both write
+  ``vagas.csv``. Use the notebook to look at the data.
+- GitHub disables scheduled workflows of public repositories after 60 days without commits;
+  re-enable it in the Actions tab if that happens.
 
 Google Colab
 ------------

@@ -3,7 +3,7 @@ from datetime import datetime
 from lib.web_scraper import create_scraper
 from trabalha_brasil.extract_data import DETAIL_FIELDS, extract_job_details, extract_page_data
 from trabalha_brasil.get_pages import sleep_between_requests
-from trabalha_brasil.storage import list_listing_runs, list_page_files, listings_folder, load_jobs, save_jobs
+from trabalha_brasil.storage import list_listing_runs, list_page_files_recursive, listings_folder, load_jobs, save_jobs
 
 # Save vagas.csv every N visited jobs, so little is lost if the run is interrupted.
 SAVE_EVERY = 10
@@ -24,7 +24,7 @@ def update_jobs_from_listings(data_folder: str) -> dict[str, dict]:
     """
     jobs = load_jobs(data_folder)
     for run_date in list_listing_runs(data_folder):
-        for _, path in list_page_files(listings_folder(data_folder, run_date)):
+        for path in list_page_files_recursive(listings_folder(data_folder, run_date)):
             with open(path, encoding="utf-8") as f:
                 cards = extract_page_data(f.read())
             for card in cards:
@@ -38,13 +38,21 @@ def update_jobs_from_listings(data_folder: str) -> dict[str, dict]:
     return jobs
 
 
-def _jobs_to_visit(jobs: dict[str, dict], recheck: bool) -> list[dict]:
+def _jobs_to_visit(
+    jobs: dict[str, dict],
+    recheck: bool,
+    max_jobs: int | None = None,
+    max_recheck: int | None = None,
+) -> list[dict]:
     """
-    Jobs without details come first. With recheck=True, jobs not yet seen as
-    closed and not checked today are also included (oldest check first).
+    Jobs without details come first (newest ids first, at most max_jobs).
+    With recheck=True, jobs not yet seen as closed and not checked today are
+    also included, the ones checked longest ago first (at most max_recheck).
     """
     today = datetime.now().date().isoformat()
-    pending = [job for job in jobs.values() if not job.get("details_fetched_at")]
+    new_jobs = [job for job in jobs.values() if not job.get("details_fetched_at")]
+    new_jobs.sort(key=lambda job: int(job["job_id"]) if job["job_id"].isdigit() else 0, reverse=True)
+    to_visit = new_jobs[:max_jobs] if max_jobs is not None else new_jobs
     if recheck:
         open_jobs = [
             job
@@ -53,14 +61,16 @@ def _jobs_to_visit(jobs: dict[str, dict], recheck: bool) -> list[dict]:
             and not job.get("closed_detected_at")
             and not (job.get("last_checked_at") or "").startswith(today)
         ]
-        pending += sorted(open_jobs, key=lambda job: job.get("last_checked_at") or "")
-    return pending
+        open_jobs.sort(key=lambda job: job.get("last_checked_at") or "")
+        to_visit += open_jobs[:max_recheck] if max_recheck is not None else open_jobs
+    return to_visit
 
 
 def get_details(
     data_folder: str,
     max_jobs: int | None = None,
     recheck: bool = False,
+    max_recheck: int | None = None,
     sleep_mean: float | None = None,
     sleep_std: float | None = None,
     engine: str = "playwright",
@@ -77,8 +87,9 @@ def get_details(
 
     Args:
         data_folder (str): Folder with listings/ and vagas.csv.
-        max_jobs (int, optional): Maximum number of job pages to visit in this run.
+        max_jobs (int, optional): Maximum number of new jobs (without details) to visit in this run.
         recheck (bool, optional): Also revisit open jobs to detect closings.
+        max_recheck (int, optional): Maximum number of open jobs to revisit in this run.
         sleep_mean (float, optional): Mean pause between requests, in seconds.
         sleep_std (float, optional): Standard deviation of the pause.
         engine (str, optional): "playwright" (Firefox headless) or "requests".
@@ -88,9 +99,7 @@ def get_details(
         dict[str, dict]: All jobs, by job_id.
     """
     jobs = update_jobs_from_listings(data_folder)
-    to_visit = _jobs_to_visit(jobs, recheck)
-    if max_jobs is not None:
-        to_visit = to_visit[:max_jobs]
+    to_visit = _jobs_to_visit(jobs, recheck, max_jobs, max_recheck)
     print(f"{len(to_visit)} job page(s) to visit")
     if not to_visit:
         return jobs

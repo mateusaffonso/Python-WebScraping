@@ -162,3 +162,91 @@ def test_create_scraper_rejects_unknown_engine():
 
     with pytest.raises(ValueError):
         create_scraper("selenium")
+
+
+# ---------- incremental (daily) collection ----------
+
+
+def test_build_listing_url():
+    assert get_pages_module.build_listing_url("https://site/vagas", 3) == "https://site/vagas?pagina=3"
+    assert get_pages_module.build_listing_url("https://site/vagas", 3, "recent") == "https://site/vagas?Ordenacao=2&pagina=3"
+    with pytest.raises(ValueError):
+        get_pages_module.build_listing_url("https://site/vagas", 1, "oldest")
+
+
+def test_get_pages_stops_after_known_pages(tmp_path, monkeypatch):
+    # Pages 1-2 have new jobs; from page 3 on, only jobs collected on previous days.
+    pages = {f"pagina={n}": _listing(n * 10 + 1, n * 10 + 2) for n in range(1, 10)}
+    fake = FakeScraper(pages)
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    known = {str(n * 10 + i) for n in range(3, 10) for i in (1, 2)}
+
+    saved = get_pages_module.get_pages(
+        "https://site/vagas", str(tmp_path), order="recent", known_job_ids=known, stop_after_known_pages=2
+    )
+    assert saved == 4  # pages 1, 2 (new) + 3, 4 (known) -> stop
+    assert fake.requested[0] == "https://site/vagas?Ordenacao=2&pagina=1"
+
+
+def test_jobs_to_visit_limits_new_and_rechecks():
+    jobs = {str(i): {"job_id": str(i), "details_fetched_at": ""} for i in range(1, 6)}
+    for i in range(6, 11):
+        jobs[str(i)] = {"job_id": str(i), "details_fetched_at": "x", "last_checked_at": f"2026-01-{i:02d}", "closed_detected_at": ""}
+    jobs["10"]["closed_detected_at"] = "2026-02-01"  # already closed: never revisited
+
+    visit = get_details_module._jobs_to_visit(jobs, recheck=True, max_jobs=2, max_recheck=3)
+    assert [job["job_id"] for job in visit] == ["5", "4", "6", "7", "8"]  # newest new jobs, then oldest checks
+
+
+def test_daily_run_and_salary_estimated(tmp_path, monkeypatch):
+    data = str(tmp_path)
+    listing = _listing(13687383, 13684778)
+    fake = FakeScraper({"pagina=1": listing, "/13687383": read_fixture("job_page.html"), "/13684778": read_fixture("closed_job_page.html")})
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_details_module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_pages_module.time, "sleep", lambda s: None)
+
+    from trabalha_brasil.daily import run_daily
+
+    run_daily(data, max_pages=5, stop_after_known_pages=1, run_date="2026-10-05")
+    jobs = load_jobs(data)
+    assert set(jobs) == {"13687383", "13684778"}
+    # The fixture job has no salary on the card but a min/max range on its page.
+    assert jobs["13687383"]["salary_estimated"] == "True"
+    assert jobs["13687383"]["first_seen"] == "2026-10-05"
+    assert jobs["13684778"]["closed_detected_at"] != ""
+
+
+def test_daily_runs_start_from_page_one_without_overwriting(tmp_path, monkeypatch):
+    data = str(tmp_path)
+    fake = FakeScraper({"pagina=1": _listing(1, 2), "pagina=2": _listing(3)})
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_details_module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_pages_module.time, "sleep", lambda s: None)
+    import trabalha_brasil.daily as daily_module
+
+    stamps = iter(["010000", "040000"])
+
+    class FakeDatetime:
+        @staticmethod
+        def now():
+            class _Now:
+                def strftime(self, fmt):
+                    return next(stamps)
+
+            return _Now()
+
+    monkeypatch.setattr(daily_module, "datetime", FakeDatetime)
+    daily_module.run_daily(data, max_pages=5, stop_after_known_pages=1, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+    fake.pages["pagina=1"] = _listing(4, 1)  # a new job (4) arrived at the top
+    daily_module.run_daily(data, max_pages=5, stop_after_known_pages=1, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+
+    day = listings_folder(data, "2026-10-05")
+    assert sorted(os.listdir(day)) == ["run_010000", "run_040000"]
+    assert len(os.listdir(os.path.join(day, "run_010000"))) == 2  # first run pages kept
+    assert set(load_jobs(data)) == {"1", "2", "3", "4"}
+    # Second run started from page 1 again (found job 4) and stopped at the known page 2.
+    assert [u for u in fake.requested if "pagina" in u][-2:] == [
+        "https://www.trabalhabrasil.com.br/vagas-de-emprego?Ordenacao=2&pagina=1",
+        "https://www.trabalhabrasil.com.br/vagas-de-emprego?Ordenacao=2&pagina=2",
+    ]

@@ -1,6 +1,5 @@
 import requests
 from enum import Enum
-from playwright.sync_api import sync_playwright
 
 
 class BrowserType(Enum):
@@ -135,6 +134,9 @@ class PlaywrightWebScraper(BaseWebScraper):
             page (Page): The new page instance created in the browser.
         """
         self.browser_type = browser_type
+        # Imported here so that the requests engine works without Playwright installed.
+        from playwright.sync_api import sync_playwright
+
         self.playwright = sync_playwright().start()
         self.browser = self._generate_playwright_browser()
         self.page = self.browser.new_page()

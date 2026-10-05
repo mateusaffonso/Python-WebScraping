@@ -1,0 +1,156 @@
+# Coleta automática das vagas do Trabalha Brasil (a cada 3 horas).
+#
+# Roda nos servidores do GitHub (o computador pode estar desligado):
+#   1. baixa o vagas.csv atual da pasta IC_scraper do Google Drive (rclone);
+#   2. coleta as vagas novas (listagem "Mais recentes"), os detalhes delas e
+#      revisita vagas abertas para detectar as encerradas;
+#   3. envia o vagas.csv atualizado e as páginas do dia (compactadas) para o Drive.
+#
+# Configuração (uma vez): segredo RCLONE_CONFIG com o conteúdo do rclone.conf
+# (veja "Coleta automática" no README). Sem o segredo, o workflow roda em modo
+# de teste: coleta pouco e não envia nada para o Drive.
+
+name: Coleta diária
+
+on:
+  schedule:
+    # A cada 3 horas (minuto 17 para fugir do pico do minuto 0). Cada rodada lê só as
+    # vagas novas (para nas já conhecidas), então rodar com frequência é barato e as
+    # vagas novas aparecem no vagas.csv em até ~3 h. Cada vaga aberta é revisitada no
+    # máximo 1x por dia (precisão do fechamento ≈ 1 dia).
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      max_pages:
+        description: "Máximo de páginas da listagem (15 vagas cada)"
+        default: "60"
+      max_jobs:
+        description: "Máximo de vagas novas para coletar detalhes"
+        default: "1500"
+      max_recheck:
+        description: "Máximo de vagas abertas para revisitar"
+        default: "400"
+      test_run:
+        description: "Modo teste (coleta pouco e não envia ao Drive)"
+        type: boolean
+        default: false
+  push:
+    branches: [feat/coleta-automatica]
+    paths: [".github/workflows/coleta-diaria.yml", "proj_scraper/**"]
+
+# Nunca duas coletas ao mesmo tempo (evita uma sobrescrever o vagas.csv da outra).
+concurrency:
+  group: coleta-diaria
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  coleta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    env:
+      DATA: ${{ github.workspace }}/coleta
+      # Remoto do rclone. Com root_folder_id = id da pasta IC_scraper, "drive:" é a própria pasta.
+      REMOTE: ${{ vars.RCLONE_REMOTE || 'drive:' }}
+      HAS_DRIVE: ${{ secrets.RCLONE_CONFIG != '' }}
+      TEST_RUN: ${{ github.event_name == 'push' || inputs.test_run == true || secrets.RCLONE_CONFIG == '' }}
+      # Por rodada (8 rodadas por dia). Pior caso ~ (60 + 1500 + 400) x 2,5 s ≈ 80 min.
+      MAX_PAGES: ${{ inputs.max_pages || '60' }}
+      MAX_JOBS: ${{ inputs.max_jobs || '1500' }}
+      MAX_RECHECK: ${{ inputs.max_recheck || '400' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instala dependências
+        run: pip install requests beautifulsoup4 typer
+
+      - name: Configura o Google Drive (rclone)
+        if: env.HAS_DRIVE == 'true'
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          # Só testa a conexão: o repositório é público e os logs também, então não listamos arquivos.
+          rclone lsf "$REMOTE" --max-depth 1 > /dev/null && echo "Conexão com o Drive OK."
+
+      - name: Baixa o vagas.csv do Drive
+        if: env.HAS_DRIVE == 'true' && env.TEST_RUN != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA"
+          if rclone lsf "$REMOTE" --files-only --max-depth 1 | grep -qx 'vagas.csv'; then
+            # Se o arquivo existe no Drive, o download TEM que funcionar (set -e):
+            # nunca começamos do zero por engano.
+            rclone copyto "${REMOTE}vagas.csv" "$DATA/vagas.csv"
+          else
+            echo "vagas.csv ainda não existe no Drive: primeira coleta."
+          fi
+          python - <<'EOF'
+          import csv, os
+          path = os.path.join(os.environ["DATA"], "vagas.csv")
+          n = sum(1 for _ in csv.DictReader(open(path, encoding="utf-8-sig"))) if os.path.exists(path) else 0
+          print(f"Linhas no vagas.csv do Drive: {n}")
+          open(os.path.join(os.environ["DATA"], ".linhas_antes"), "w").write(str(n))
+          EOF
+
+      - name: Coleta
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA"
+          if [ "$TEST_RUN" = "true" ]; then
+            echo "Modo teste: limites pequenos, nada vai para o Drive."
+            ARGS="--max-pages 2 --max-jobs 5 --max-recheck 0"
+          else
+            ARGS="--max-pages $MAX_PAGES --max-jobs $MAX_JOBS --max-recheck $MAX_RECHECK"
+          fi
+          python proj_scraper/run.py trabalha-brasil daily --data-folder "$DATA" --engine requests $ARGS 2>&1 | tee "$DATA/coleta.log"
+
+      - name: Confere o resultado antes de enviar
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import csv, os
+          data = os.environ["DATA"]
+          rows = list(csv.DictReader(open(os.path.join(data, "vagas.csv"), encoding="utf-8-sig")))
+          before_path = os.path.join(data, ".linhas_antes")
+          before = int(open(before_path).read()) if os.path.exists(before_path) else 0
+          print(f"Linhas: antes {before}, depois {len(rows)}")
+          # Proteção: o vagas.csv só cresce. Se encolheu, algo deu errado e não enviamos.
+          assert len(rows) >= before, "vagas.csv encolheu: envio cancelado"
+          print(f"Com detalhes: {sum(1 for r in rows if r['details_fetched_at'])} | Encerradas detectadas: {sum(1 for r in rows if r['closed_detected_at'])}")
+          EOF
+          DAY=$(date -u +%F)
+          if [ -d "$DATA/listings/$DAY" ]; then
+            tar -czf "$DATA/listings_${DAY}_${GITHUB_RUN_ID}.tar.gz" -C "$DATA/listings" "$DAY"
+          fi
+
+      - name: Envia para o Drive
+        if: env.HAS_DRIVE == 'true' && env.TEST_RUN != 'true'
+        run: |
+          set -euo pipefail
+          DAY=$(date -u +%F)
+          rclone copyto "$DATA/vagas.csv" "${REMOTE}vagas.csv"
+          if [ -f "$DATA/listings_${DAY}_${GITHUB_RUN_ID}.tar.gz" ]; then
+            rclone copyto "$DATA/listings_${DAY}_${GITHUB_RUN_ID}.tar.gz" "${REMOTE}listings_compactadas/${DAY}_${GITHUB_RUN_ID}.tar.gz"
+          fi
+          rclone copyto "$DATA/coleta.log" "${REMOTE}logs/${DAY}_${GITHUB_RUN_ID}.log"
+          echo "Enviado para o Drive."
+
+      # Repositório público: arquivos de execução podem ser baixados por qualquer pessoa.
+      # Por isso só o log é guardado (sem vagas.csv nem páginas), e só em modo teste ou se algo falhar.
+      - name: Guarda o log no GitHub (7 dias)
+        if: failure() || env.HAS_DRIVE != 'true' || env.TEST_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ github.run_id }}
+          path: coleta/coleta.log
+          retention-days: 7
+          if-no-files-found: ignore

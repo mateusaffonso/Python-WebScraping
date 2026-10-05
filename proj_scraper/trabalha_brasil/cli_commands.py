@@ -3,13 +3,12 @@ from typing import Optional
 
 import typer
 
+from trabalha_brasil.daily import run_daily
 from trabalha_brasil.get_details import get_details, update_jobs_from_listings
-from trabalha_brasil.get_pages import get_pages
-from trabalha_brasil.storage import JOBS_CSV, listings_folder
+from trabalha_brasil.get_pages import BASE_URL, ORDER_PARAMS, get_pages
+from trabalha_brasil.storage import JOBS_CSV, listings_folder, load_jobs
 
 app = typer.Typer()
-
-BASE_URL = "https://www.trabalhabrasil.com.br/vagas-de-emprego"
 
 DataFolder = typer.Option("./data", "--data-folder", "-d", help="Folder where the pages and vagas.csv are saved (e.g. a Google Drive folder).")
 SleepMean = typer.Option(2.0, help="Mean pause between requests, in seconds.")
@@ -26,6 +25,10 @@ def get_trabalha_brasil_pages(
     sleep_std: float = SleepStd,
     engine: str = Engine,
     log_num_pages: int = typer.Option(1, help="Print a message every N pages."),
+    order: str = typer.Option("relevant", help=f"Listing order: {' or '.join(ORDER_PARAMS)} (newest first)."),
+    stop_after_known_pages: Optional[int] = typer.Option(
+        None, help="Stop after N pages in a row with no job outside vagas.csv (use with --order recent for daily collections)."
+    ),
 ):
     """
     Downloads the job listing pages of the Trabalha Brasil website.
@@ -41,6 +44,9 @@ def get_trabalha_brasil_pages(
         log_num_pages=log_num_pages,
         max_pages=max_pages,
         engine=engine,
+        order=order,
+        known_job_ids=set(load_jobs(data_folder)) if stop_after_known_pages else None,
+        stop_after_known_pages=stop_after_known_pages,
     )
 
 
@@ -57,8 +63,9 @@ def extract_trabalha_brasil_data(data_folder: str = DataFolder):
 @app.command("get-details")
 def get_trabalha_brasil_details(
     data_folder: str = DataFolder,
-    max_jobs: Optional[int] = typer.Option(None, help="Maximum number of job pages to visit in this run."),
+    max_jobs: Optional[int] = typer.Option(None, help="Maximum number of new jobs (without details) to visit in this run."),
     recheck: bool = typer.Option(False, "--recheck", help="Also revisit open jobs to detect the ones that were closed."),
+    max_recheck: Optional[int] = typer.Option(None, help="Maximum number of open jobs to revisit (with --recheck)."),
     sleep_mean: float = SleepMean,
     sleep_std: float = SleepStd,
     engine: str = Engine,
@@ -71,6 +78,7 @@ def get_trabalha_brasil_details(
         data_folder,
         max_jobs=max_jobs,
         recheck=recheck,
+        max_recheck=max_recheck,
         sleep_mean=sleep_mean,
         sleep_std=sleep_std,
         engine=engine,
@@ -78,3 +86,31 @@ def get_trabalha_brasil_details(
     with_details = sum(1 for job in jobs.values() if job.get("details_fetched_at"))
     closed = sum(1 for job in jobs.values() if job.get("closed_detected_at"))
     print(f"{len(jobs)} job(s) in {data_folder}/{JOBS_CSV}: {with_details} with details, {closed} detected as closed")
+
+
+@app.command("daily")
+def daily_collection(
+    data_folder: str = DataFolder,
+    max_pages: Optional[int] = typer.Option(100, help="Maximum number of listing pages (15 jobs each)."),
+    stop_after_known_pages: int = typer.Option(3, help="Stop the listing after N pages in a row with no new job."),
+    max_jobs: Optional[int] = typer.Option(2000, help="Maximum number of new jobs to get details for."),
+    max_recheck: Optional[int] = typer.Option(1000, help="Maximum number of open jobs to revisit to detect closings."),
+    sleep_mean: float = SleepMean,
+    sleep_std: float = SleepStd,
+    engine: str = typer.Option("requests", help='"requests" (default here, lighter) or "playwright".'),
+):
+    """
+    Daily incremental collection: newest jobs of the listing + their details +
+    revisits of open jobs to detect closings. Meant to run once a day (see
+    .github/workflows/coleta-diaria.yml).
+    """
+    run_daily(
+        data_folder,
+        max_pages=max_pages,
+        stop_after_known_pages=stop_after_known_pages,
+        max_jobs=max_jobs,
+        max_recheck=max_recheck,
+        sleep_mean=sleep_mean,
+        sleep_std=sleep_std,
+        engine=engine,
+    )

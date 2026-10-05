@@ -3,6 +3,7 @@ Storage layout inside the data folder:
 
     <data_folder>/
         listings/<YYYY-MM-DD>/page_<N>.html   raw listing pages, one folder per collection day
+        listings/<YYYY-MM-DD>/run_<HHMMSS>/   pages of each run of the "daily" command
         vagas.csv                             one row per job (the main dataset)
 """
 
@@ -23,7 +24,14 @@ TRACKING_FIELDS = [
     "closed_detected_at",  # first time the job page said "A vaga foi encerrada"
 ]
 
-JOB_FIELDS = LISTING_FIELDS + TRACKING_FIELDS + DETAIL_FIELDS + ["closed"]
+DERIVED_FIELDS = [
+    "closed",  # job page said "A vaga foi encerrada" in the last visit
+    # True when the listing shows no salary ("a combinar") but the job page has a
+    # salary range: the range is an estimate made by the site, not the employer's offer.
+    "salary_estimated",
+]
+
+JOB_FIELDS = LISTING_FIELDS + TRACKING_FIELDS + DETAIL_FIELDS + DERIVED_FIELDS
 
 PAGE_FILE_PATTERN = re.compile(r"^page_(\d+)\.html$")
 
@@ -46,6 +54,15 @@ def list_page_files(folder: str) -> list[tuple[int, str]]:
         if match:
             pages.append((int(match.group(1)), os.path.join(folder, file_name)))
     return sorted(pages)
+
+
+def list_page_files_recursive(folder: str) -> list[str]:
+    """Returns the paths of every page_<N>.html in the folder and its subfolders (sorted)."""
+    paths = []
+    for root, dirs, _ in os.walk(folder):
+        dirs.sort()
+        paths += [path for _, path in list_page_files(root)]
+    return paths
 
 
 def list_listing_runs(data_folder: str) -> list[str]:
@@ -86,6 +103,8 @@ def save_jobs(data_folder: str, jobs: dict[str, dict]) -> str:
         writer = csv.DictWriter(f, fieldnames=JOB_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for job in jobs.values():
+            if job.get("details_fetched_at"):
+                job["salary_estimated"] = bool(job.get("salary_max")) and not job.get("salary")
             writer.writerow(job)
     os.replace(tmp_path, path)
     return path
