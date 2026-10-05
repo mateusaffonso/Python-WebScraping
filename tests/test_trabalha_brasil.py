@@ -351,3 +351,13 @@ def test_shard_collects_occupation_and_writes_partial(tmp_path, monkeypatch):
     assert changed["13684778"]["validated"] == "False" and changed["13684778"]["closed_detected_at"]
     import json
     assert json.load(open(state))["done"] == ["vendedor"]
+
+
+def test_page_with_marker_but_no_job_cards_is_the_end(tmp_path, monkeypatch):
+    # Rare occupations: page 2 has no job card, but "job-link" still appears in the HTML.
+    empty = '<html><head><style>.job-link{color:red}</style></head><body>Nenhuma vaga</body></html>'
+    fake = FakeScraper({"pagina=1": _listing(13600001), "pagina=2": empty, "pagina=3": empty})
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    stats = {}
+    saved = get_pages_module.get_pages("https://site/cargo", str(tmp_path), order="recent", min_job_id=1, stats=stats)
+    assert saved == 1 and stats["stop_reason"] == "end"

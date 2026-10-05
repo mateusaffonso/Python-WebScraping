@@ -131,9 +131,10 @@ def run_shard(
             print("Listing time limit reached: the remaining occupations stay for the next run.")
             break
         stats = {}
+        occupation_folder = os.path.join(run_folder, "cargos", occupation)
         try:
             get_pages(
-                f"{BASE_URL}/{occupation}", os.path.join(run_folder, "cargos", occupation), sleep_mean=sleep_mean,
+                f"{BASE_URL}/{occupation}", occupation_folder, sleep_mean=sleep_mean,
                 sleep_std=sleep_std, log_num_pages=100, max_pages=500, engine=engine, order="recent",
                 min_job_id=min_job_id, deadline=listing_deadline, stats=stats,
             )
