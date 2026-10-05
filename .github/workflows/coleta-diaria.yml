@@ -54,6 +54,8 @@ jobs:
       DATA: ${{ github.workspace }}/coleta
       # Remoto do rclone. Com root_folder_id = id da pasta IC_scraper, "drive:" é a própria pasta.
       REMOTE: ${{ vars.RCLONE_REMOTE || 'drive:' }}
+      # Horários do vagas.csv no horário de Brasília (antes de 05/10, execução #6, ficaram em UTC).
+      TZ: America/Sao_Paulo
       HAS_DRIVE: ${{ secrets.RCLONE_CONFIG != '' }}
       TEST_RUN: ${{ github.event_name == 'push' || inputs.test_run == true || secrets.RCLONE_CONFIG == '' }}
       # Por rodada (8 rodadas por dia). Pior caso ~ (60 + 1500 + 400) x 2,5 s ≈ 80 min.

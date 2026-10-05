@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 from lib.web_scraper import create_scraper
@@ -7,6 +8,15 @@ from trabalha_brasil.storage import list_listing_runs, list_page_files_recursive
 
 # Save vagas.csv every N visited jobs, so little is lost if the run is interrupted.
 SAVE_EVERY = 10
+
+# A job page that fails this many times (e.g. removed from the site) is not tried again.
+MAX_FETCH_ERRORS = 3
+
+# After this many errors in a row the site may be refusing requests: pause for
+# ERROR_PAUSE seconds, and give up the run after MAX_ERROR_PAUSES pauses.
+ERRORS_IN_A_ROW = 10
+ERROR_PAUSE = 300
+MAX_ERROR_PAUSES = 3
 
 
 def _now() -> str:
@@ -43,14 +53,22 @@ def _jobs_to_visit(
     recheck: bool,
     max_jobs: int | None = None,
     max_recheck: int | None = None,
+    eligible_ids: set[str] | None = None,
 ) -> list[dict]:
     """
     Jobs without details come first (newest ids first, at most max_jobs).
     With recheck=True, jobs not yet seen as closed and not checked today are
     also included, the ones checked longest ago first (at most max_recheck).
+    Only jobs in eligible_ids are considered, if given (parallel collection).
     """
     today = datetime.now().date().isoformat()
-    new_jobs = [job for job in jobs.values() if not job.get("details_fetched_at")]
+    if eligible_ids is not None:
+        jobs = {job_id: job for job_id, job in jobs.items() if job_id in eligible_ids}
+    new_jobs = [
+        job
+        for job in jobs.values()
+        if not job.get("details_fetched_at") and int(job.get("fetch_errors") or 0) < MAX_FETCH_ERRORS
+    ]
     new_jobs.sort(key=lambda job: int(job["job_id"]) if job["job_id"].isdigit() else 0, reverse=True)
     to_visit = new_jobs[:max_jobs] if max_jobs is not None else new_jobs
     if recheck:
@@ -75,6 +93,8 @@ def get_details(
     sleep_std: float | None = None,
     engine: str = "playwright",
     log_num_jobs: int = 10,
+    eligible_ids: set[str] | None = None,
+    deadline: float | None = None,
 ) -> dict[str, dict]:
     """
     Visits the page of each job to collect its details (publication date,
@@ -94,26 +114,42 @@ def get_details(
         sleep_std (float, optional): Standard deviation of the pause.
         engine (str, optional): "playwright" (Firefox headless) or "requests".
         log_num_jobs (int, optional): Print a message every log_num_jobs jobs.
+        eligible_ids (set[str], optional): Only visit these jobs (parallel collection).
+        deadline (float, optional): time.time() value after which no new job is visited.
 
     Returns:
         dict[str, dict]: All jobs, by job_id.
     """
     jobs = update_jobs_from_listings(data_folder)
-    to_visit = _jobs_to_visit(jobs, recheck, max_jobs, max_recheck)
+    to_visit = _jobs_to_visit(jobs, recheck, max_jobs, max_recheck, eligible_ids)
     print(f"{len(to_visit)} job page(s) to visit")
     if not to_visit:
         return jobs
 
     scraper = create_scraper(engine)
-    visited = errors = 0
+    visited = errors = errors_in_a_row = pauses = 0
     try:
         for job in to_visit:
+            if deadline is not None and time.time() > deadline:
+                print("Time limit reached: the remaining jobs stay for the next run.")
+                break
             try:
                 page = scraper.get_html(job["url"])
             except Exception as e:
                 errors += 1
+                errors_in_a_row += 1
+                job["fetch_errors"] = int(job.get("fetch_errors") or 0) + 1
                 print(f"Error on job {job['job_id']}: {e}")
+                if errors_in_a_row >= ERRORS_IN_A_ROW:
+                    pauses += 1
+                    if pauses > MAX_ERROR_PAUSES:
+                        print("Too many errors in a row: stopping this run.")
+                        break
+                    print(f"{errors_in_a_row} errors in a row: pausing {ERROR_PAUSE} s")
+                    time.sleep(ERROR_PAUSE)
+                    errors_in_a_row = 0
                 continue
+            errors_in_a_row = 0
             details = extract_job_details(page)
             checked_at = _now()
 

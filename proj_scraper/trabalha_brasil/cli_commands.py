@@ -6,7 +6,8 @@ import typer
 from trabalha_brasil.daily import run_daily
 from trabalha_brasil.get_details import get_details, update_jobs_from_listings
 from trabalha_brasil.get_pages import BASE_URL, ORDER_PARAMS, get_pages
-from trabalha_brasil.storage import JOBS_CSV, listings_folder, load_jobs
+from trabalha_brasil.intensive import run_shard
+from trabalha_brasil.storage import JOBS_CSV, listings_folder, load_jobs, load_jobs_file, merge_jobs, save_jobs
 
 app = typer.Typer()
 
@@ -114,3 +115,43 @@ def daily_collection(
         sleep_std=sleep_std,
         engine=engine,
     )
+
+
+@app.command("shard")
+def intensive_shard(
+    data_folder: str = DataFolder,
+    shard: int = typer.Option(..., help="Number of this shard (0 to n-shards - 1)."),
+    n_shards: int = typer.Option(..., help="Number of shards running in parallel."),
+    state_file: str = typer.Option(..., help="JSON with the occupations already read by this shard (kept between runs)."),
+    min_job_id: int = typer.Option(..., help="Smallest job id of interest: start of the period (ids grow with the publication date)."),
+    partial: str = typer.Option(..., help="CSV where the jobs added or changed by this shard are written."),
+    listing_minutes: float = typer.Option(90, help="Time for reading listings, in minutes."),
+    total_minutes: float = typer.Option(300, help="Total time of the run, in minutes."),
+    max_recheck: Optional[int] = typer.Option(400, help="Maximum number of open jobs to revisit."),
+    sleep_mean: float = SleepMean,
+    sleep_std: float = SleepStd,
+    engine: str = typer.Option("requests", help='"requests" (default here) or "playwright".'),
+):
+    """
+    One machine of the intensive (parallel) collection: general listing (shard 0),
+    listings by occupation back to --min-job-id, details and rechecks of its share.
+    """
+    run_shard(
+        data_folder, shard, n_shards, state_file, min_job_id, listing_minutes=listing_minutes,
+        total_minutes=total_minutes, max_recheck=max_recheck, sleep_mean=sleep_mean, sleep_std=sleep_std,
+        engine=engine, partial_path=partial,
+    )
+
+
+@app.command("merge")
+def merge_partials(
+    partials: list[str] = typer.Argument(..., help="Partial CSVs written by the shards."),
+    data_folder: str = DataFolder,
+):
+    """Merges the partial CSVs of the shards into <data-folder>/vagas.csv (nothing is removed)."""
+    base = load_jobs(data_folder)
+    merged = merge_jobs(base, [load_jobs_file(path) for path in partials])
+    if len(merged) < len(base):
+        raise typer.Exit(code=1)
+    save_jobs(data_folder, merged)
+    print(f"vagas.csv: {len(base)} -> {len(merged)} job(s) ({len(partials)} partial file(s))")

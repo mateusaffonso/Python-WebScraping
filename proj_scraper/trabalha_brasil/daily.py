@@ -10,6 +10,7 @@ def run_daily(
     data_folder: str,
     max_pages: int | None = 100,
     stop_after_known_pages: int = 3,
+    min_pages: int = 40,
     max_jobs: int | None = 2000,
     max_recheck: int | None = 1000,
     sleep_mean: float = 2.0,
@@ -24,7 +25,9 @@ def run_daily(
        listings/<run_date>/run_<HHMMSS>/ (a new folder per run, so several runs
        per day never overwrite each other).
        Stops after stop_after_known_pages pages in a row with no job outside
-       vagas.csv (or at max_pages).
+       vagas.csv (or at max_pages). Known pages are only counted after page
+       min_pages: the listing starts with a sparse block of ~30 pages, and the
+       complete newest-first sequence only comes after it.
     2. Details (publication date, salary, description) of the new jobs (at most max_jobs).
     3. Revisits up to max_recheck open jobs (checked longest ago first) to detect
        the closed ones (closed_detected_at).
@@ -49,6 +52,7 @@ def run_daily(
         order="recent",
         known_job_ids=known_job_ids,
         stop_after_known_pages=stop_after_known_pages,
+        min_pages=min_pages,
     )
 
     print("== 2/2 Job pages (new jobs + rechecks)")
