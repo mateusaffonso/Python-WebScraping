@@ -86,10 +86,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$DATA"
-          if rclone lsf "$REMOTE" --files-only --max-depth 1 | grep -qx 'vagas.csv'; then
+          ARQUIVOS=$(rclone lsf "$REMOTE" --max-depth 1)
+          if echo "$ARQUIVOS" | grep -qx 'vagas.csv'; then
             # Se o arquivo existe no Drive, o download TEM que funcionar (set -e):
             # nunca começamos do zero por engano.
             rclone copyto "${REMOTE}vagas.csv" "$DATA/vagas.csv"
+          elif echo "$ARQUIVOS" | grep -q '^vagas\.csv\.'; then
+            # O rclone mostra Planilhas Google como "vagas.csv.xlsx": o arquivo foi convertido.
+            echo "::error::O vagas.csv do Drive está como Planilha Google. Suba o arquivo como CSV (desative 'Converter arquivos enviados' nas configurações do Drive). Nada foi alterado."
+            exit 1
+          elif echo "$ARQUIVOS" | grep -qx 'logs/'; then
+            # Já houve coletas antes (pasta logs/), então o vagas.csv deveria existir.
+            echo "::error::vagas.csv não encontrado no Drive, mas já houve coletas antes (pasta logs/). Coleta cancelada para não começar do zero. Nada foi alterado."
+            exit 1
           else
             echo "vagas.csv ainda não existe no Drive: primeira coleta."
           fi
