@@ -7,7 +7,12 @@ from tests.conftest import read_fixture
 from trabalha_brasil import get_details as get_details_module
 from trabalha_brasil import get_pages as get_pages_module
 from trabalha_brasil.extract_data import extract_job_details, extract_page_data, is_job_closed
-from trabalha_brasil.storage import list_page_files, listings_folder, load_jobs, save_jobs
+from trabalha_brasil.storage import list_page_files, listings_folder, load_jobs, merge_jobs, save_jobs
+
+
+@pytest.fixture(autouse=True)
+def no_retry_wait(monkeypatch):
+    monkeypatch.setattr(get_pages_module, "EMPTY_PAGE_WAIT", 0)
 
 
 # ---------- extraction ----------
@@ -208,7 +213,7 @@ def test_daily_run_and_salary_estimated(tmp_path, monkeypatch):
 
     from trabalha_brasil.daily import run_daily
 
-    run_daily(data, max_pages=5, stop_after_known_pages=1, run_date="2026-10-05")
+    run_daily(data, max_pages=5, stop_after_known_pages=1, min_pages=0, run_date="2026-10-05")
     jobs = load_jobs(data)
     assert set(jobs) == {"13687383", "13684778"}
     # The fixture job has no salary on the card but a min/max range on its page.
@@ -237,9 +242,10 @@ def test_daily_runs_start_from_page_one_without_overwriting(tmp_path, monkeypatc
             return _Now()
 
     monkeypatch.setattr(daily_module, "datetime", FakeDatetime)
-    daily_module.run_daily(data, max_pages=5, stop_after_known_pages=1, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+    kwargs = dict(max_pages=5, stop_after_known_pages=1, min_pages=0, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+    daily_module.run_daily(data, **kwargs)
     fake.pages["pagina=1"] = _listing(4, 1)  # a new job (4) arrived at the top
-    daily_module.run_daily(data, max_pages=5, stop_after_known_pages=1, max_jobs=0, max_recheck=0, run_date="2026-10-05")
+    daily_module.run_daily(data, **kwargs)
 
     day = listings_folder(data, "2026-10-05")
     assert sorted(os.listdir(day)) == ["run_010000", "run_040000"]
@@ -250,3 +256,98 @@ def test_daily_runs_start_from_page_one_without_overwriting(tmp_path, monkeypatc
         "https://www.trabalhabrasil.com.br/vagas-de-emprego?Ordenacao=2&pagina=1",
         "https://www.trabalhabrasil.com.br/vagas-de-emprego?Ordenacao=2&pagina=2",
     ]
+
+
+# ---------- site structure found on 05/10/2026 ----------
+
+
+def test_known_pages_only_count_after_min_pages(tmp_path, monkeypatch):
+    # Block 1 (pages 1-3): sparse sample, all known. Block 2 (pages 4-7): new jobs, then
+    # jobs collected in previous runs (the site does not repeat block 1 jobs in block 2).
+    pages = {"pagina=1": _listing(901, 902), "pagina=2": _listing(801), "pagina=3": _listing(701)}
+    pages.update({"pagina=4": _listing(950, 949), "pagina=5": _listing(948, 947), "pagina=6": _listing(900), "pagina=7": _listing(899)})
+    fake = FakeScraper(pages)
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    known = {"901", "902", "801", "701", "900", "899"}
+    stats = {}
+    saved = get_pages_module.get_pages(
+        "https://site/vagas", str(tmp_path), order="recent", known_job_ids=known,
+        stop_after_known_pages=2, min_pages=3, stats=stats,
+    )
+    assert saved == 7 and stats["stop_reason"] == "known"
+
+
+def test_stops_at_jobs_older_than_min_job_id(tmp_path, monkeypatch):
+    pages = {f"pagina={n}": _listing(1000 - n * 10, 999 - n * 10) for n in range(1, 20)}
+    fake = FakeScraper(pages)
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    stats = {}
+    saved = get_pages_module.get_pages("https://site/cargo", str(tmp_path), order="recent", min_job_id=955, stats=stats)
+    # Pages 1-4 have ids >= 955; pages 5 and 6 are older -> stop after 2 old pages.
+    assert saved == 6 and stats["stop_reason"] == "old"
+
+
+def test_temporarily_empty_page_is_retried(tmp_path, monkeypatch):
+    calls = {"n": 0}
+    fake = FakeScraper({"pagina=1": _listing(*range(100, 115))})  # a full page (15 jobs)
+
+    def flaky(url):
+        calls["n"] += 1
+        if url.endswith("pagina=2") and calls["n"] == 2:
+            return "<html><body>Nenhuma vaga</body></html>"
+        if url.endswith("pagina=2"):
+            return _listing(2)
+        return FakeScraper._find(fake, url)
+
+    fake.get_page = flaky
+    monkeypatch.setattr(get_pages_module, "create_scraper", lambda engine: fake)
+    saved = get_pages_module.get_pages("https://site/vagas", str(tmp_path), order="recent", max_pages=2)
+    assert saved == 2
+
+
+def test_merge_jobs_keeps_everything_and_best_values():
+    base = {"1": {"job_id": "1", "first_seen": "2026-10-04", "last_seen": "2026-10-04", "date_posted": "2026-10-03",
+                  "details_fetched_at": "2026-10-04T01:00:00", "last_checked_at": "2026-10-04T01:00:00", "closed": "False"},
+            "2": {"job_id": "2", "first_seen": "2026-10-04", "last_seen": "2026-10-04"}}
+    shard_a = {"1": {**base["1"], "last_seen": "2026-10-06", "last_checked_at": "2026-10-06T10:00:00", "closed": "True",
+                     "closed_detected_at": "2026-10-06T10:00:00", "date_posted": ""},
+               "3": {"job_id": "3", "first_seen": "2026-10-06", "last_seen": "2026-10-06", "date_posted": "2026-10-06"}}
+    shard_b = {"2": {**base["2"], "date_posted": "2026-10-02", "details_fetched_at": "2026-10-06T11:00:00"},
+               "3": {"job_id": "3", "first_seen": "2026-10-06", "last_seen": "2026-10-06"}}
+    merged = merge_jobs(base, [shard_a, shard_b])
+    assert set(merged) == {"1", "2", "3"}
+    assert merged["1"]["date_posted"] == "2026-10-03"  # details from when it was open are kept
+    assert merged["1"]["closed"] == "True" and merged["1"]["closed_detected_at"] == "2026-10-06T10:00:00"
+    assert merged["1"]["last_seen"] == "2026-10-06" and merged["1"]["first_seen"] == "2026-10-04"
+    assert merged["2"]["date_posted"] == "2026-10-02"
+    assert merged["3"]["date_posted"] == "2026-10-06"
+    assert merge_jobs(merged, [shard_a, shard_b]) == merged  # merging again changes nothing
+
+
+def test_shard_collects_occupation_and_writes_partial(tmp_path, monkeypatch):
+    from trabalha_brasil import intensive
+
+    data = str(tmp_path / "data")
+    save_jobs(data, {"13600000": {"job_id": "13600000", "url": "https://www.trabalhabrasil.com.br/x/y/13600000",
+                                  "first_seen": "2026-10-04", "last_seen": "2026-10-04"}})
+    pages = {"vendedor?Ordenacao=2&pagina=1": _listing(13687383, 13684778),
+             "vendedor?Ordenacao=2&pagina=2": _listing(13500001), "vendedor?Ordenacao=2&pagina=3": _listing(13500000),
+             "/13687383": read_fixture("job_page.html"), "/13684778": read_fixture("closed_job_page.html")}
+    fake = FakeScraper(pages)
+    for module in (get_pages_module, get_details_module):
+        monkeypatch.setattr(module, "create_scraper", lambda engine: fake)
+    monkeypatch.setattr(get_pages_module.time, "sleep", lambda s: None)
+    state = str(tmp_path / "estado.json")
+    with open(state, "w") as f:
+        f.write('{"occupations": ["vendedor"]}')
+    partial = str(tmp_path / "parcial.csv")
+    intensive.run_shard(data, shard=intensive.shard_of("vendedor", 2), n_shards=2, state_path=state,
+                        min_job_id=13600000, max_recheck=0, sleep_mean=None, partial_path=partial)
+    from trabalha_brasil.storage import load_jobs_file
+
+    changed = load_jobs_file(partial)
+    assert {"13687383", "13684778", "13500001", "13500000"} <= set(changed)
+    assert changed["13687383"]["validated"] == "True" and changed["13687383"]["date_posted"] == "2026-10-02"
+    assert changed["13684778"]["validated"] == "False" and changed["13684778"]["closed_detected_at"]
+    import json
+    assert json.load(open(state))["done"] == ["vendedor"]

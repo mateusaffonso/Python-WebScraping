@@ -1,0 +1,158 @@
+# Coleta intensiva: 4 máquinas do GitHub em paralelo, cada uma com a sua parte do trabalho.
+#
+#   - máquina 0 lê a listagem geral "Mais recentes" (até o limite de 500 páginas do site);
+#   - cada máquina lê a listagem "Mais recentes" de 1/4 das profissões do site, voltando
+#     até vagas mais antigas que MIN_JOB_ID (início do período de interesse);
+#   - cada máquina abre a página de cada vaga nova (validação no próprio site), da mais
+#     nova para a mais antiga, e revisita vagas abertas para detectar as encerradas;
+#   - no fim, o job "juntar" junta as partes no vagas.csv do Drive (nada é apagado).
+#
+# Usa o mesmo segredo RCLONE_CONFIG da coleta diária e o mesmo grupo de concorrência:
+# nunca roda ao mesmo tempo que ela, então as duas nunca sobrescrevem o vagas.csv.
+
+name: Coleta intensiva
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_job_id:
+        description: "Menor número de vaga de interesse (13605000 ≈ vagas publicadas desde 01/09/2026)"
+        default: "13605000"
+      listing_minutes:
+        description: "Minutos para ler listagens, por máquina"
+        default: "100"
+      total_minutes:
+        description: "Minutos totais por máquina (máximo ~320)"
+        default: "300"
+  schedule:
+    # A cada 2 horas; se ainda houver uma execução rodando, a próxima espera na fila.
+    - cron: "47 */2 * * *"
+
+concurrency:
+  group: coleta-diaria
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REMOTE: ${{ vars.RCLONE_REMOTE || 'drive:' }}
+  HAS_DRIVE: ${{ secrets.RCLONE_CONFIG != '' }}
+  DATA: ${{ github.workspace }}/coleta
+  TZ: America/Sao_Paulo
+  N_SHARDS: "4"
+  MIN_JOB_ID: ${{ inputs.min_job_id || '13605000' }}
+  LISTING_MINUTES: ${{ inputs.listing_minutes || '100' }}
+  TOTAL_MINUTES: ${{ inputs.total_minutes || '300' }}
+
+jobs:
+  coleta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instala dependências
+        run: pip install requests beautifulsoup4 typer
+
+      - name: Configura o Google Drive (rclone)
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          if [ "$HAS_DRIVE" != "true" ]; then echo "::error::Segredo RCLONE_CONFIG ausente."; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          # Repositório público: só testa a conexão, sem listar arquivos no log.
+          rclone lsf "$REMOTE" --max-depth 1 > /dev/null && echo "Conexão com o Drive OK."
+
+      - name: Baixa o vagas.csv e o estado desta máquina
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA"
+          ARQUIVOS=$(rclone lsf "$REMOTE" --max-depth 1)
+          if echo "$ARQUIVOS" | grep -qx 'vagas.csv'; then
+            rclone copyto "${REMOTE}vagas.csv" "$DATA/vagas.csv"
+          else
+            echo "::error::vagas.csv não encontrado no Drive (ou convertido em Planilha Google). Nada foi alterado."
+            exit 1
+          fi
+          ESTADO="estado/cargos_maquina_${{ matrix.shard }}.json"
+          if rclone lsf "${REMOTE}estado/" 2>/dev/null | grep -qx "cargos_maquina_${{ matrix.shard }}.json"; then
+            rclone copyto "${REMOTE}${ESTADO}" "$DATA/estado.json"
+          fi
+
+      - name: Coleta (máquina ${{ matrix.shard }})
+        run: |
+          set -euo pipefail
+          python proj_scraper/run.py trabalha-brasil shard --data-folder "$DATA" \
+            --shard ${{ matrix.shard }} --n-shards "$N_SHARDS" --state-file "$DATA/estado.json" \
+            --min-job-id "$MIN_JOB_ID" --partial "$DATA/parcial.csv" \
+            --listing-minutes "$LISTING_MINUTES" --total-minutes "$TOTAL_MINUTES" 2>&1 | tee "$DATA/coleta.log"
+
+      - name: Envia a parte desta máquina para o Drive
+        if: always()
+        run: |
+          set -uo pipefail
+          DAY=$(date +%F)
+          S=${{ matrix.shard }}
+          if [ -f "$DATA/parcial.csv" ]; then
+            rclone copyto "$DATA/parcial.csv" "${REMOTE}parciais/${GITHUB_RUN_ID}_maquina_${S}.csv"
+          elif [ -f "$DATA/vagas.csv" ]; then
+            # A coleta parou no meio: envia o vagas.csv desta máquina (salvo a cada 10 vagas),
+            # para o trabalho feito não se perder. Juntar duas vezes a mesma vaga não muda nada.
+            rclone copyto "$DATA/vagas.csv" "${REMOTE}parciais/${GITHUB_RUN_ID}_maquina_${S}.csv"
+          fi
+          [ -f "$DATA/estado.json" ] && rclone copyto "$DATA/estado.json" "${REMOTE}estado/cargos_maquina_${S}.json"
+          if [ -d "$DATA/listings" ]; then
+            tar -czf "$DATA/listings.tar.gz" -C "$DATA" listings
+            rclone copyto "$DATA/listings.tar.gz" "${REMOTE}listings_compactadas/${DAY}_${GITHUB_RUN_ID}_maquina_${S}.tar.gz"
+          fi
+          [ -f "$DATA/coleta.log" ] && rclone copyto "$DATA/coleta.log" "${REMOTE}logs/${DAY}_${GITHUB_RUN_ID}_maquina_${S}.log"
+          echo "Enviado para o Drive."
+
+  juntar:
+    needs: coleta
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instala dependências
+        run: pip install requests beautifulsoup4 typer
+      - name: Configura o Google Drive (rclone)
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+      - name: Junta as partes no vagas.csv
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA/parciais"
+          if ! rclone lsf "$REMOTE" --max-depth 1 | grep -qx 'vagas.csv'; then
+            echo "::error::vagas.csv não encontrado no Drive. Nada foi alterado."; exit 1
+          fi
+          rclone copyto "${REMOTE}vagas.csv" "$DATA/vagas.csv"
+          rclone copy "${REMOTE}parciais/" "$DATA/parciais/" --include "${GITHUB_RUN_ID}_*"
+          ls "$DATA/parciais" | grep -q . || { echo "Nenhuma parte para juntar."; exit 0; }
+          python proj_scraper/run.py trabalha-brasil merge --data-folder "$DATA" "$DATA"/parciais/*.csv 2>&1 | tee "$DATA/juntar.log"
+          python - <<'PY'
+          import csv, os
+          rows = list(csv.DictReader(open(os.path.join(os.environ["DATA"], "vagas.csv"), encoding="utf-8-sig")))
+          print(f"Total: {len(rows)} | validadas no site: {sum(r['validated'] == 'True' for r in rows)} | "
+                f"encerradas detectadas: {sum(1 for r in rows if r['closed_detected_at'])}")
+          PY
+          rclone copyto "$DATA/vagas.csv" "${REMOTE}vagas.csv"
+          rclone copyto "$DATA/juntar.log" "${REMOTE}logs/$(date +%F)_${GITHUB_RUN_ID}_juntar.log"
+          echo "vagas.csv atualizado no Drive."

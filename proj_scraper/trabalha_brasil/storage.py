@@ -22,6 +22,7 @@ TRACKING_FIELDS = [
     "details_fetched_at",  # when the job page was downloaded for the first time
     "last_checked_at",  # last time the job page was (re)visited
     "closed_detected_at",  # first time the job page said "A vaga foi encerrada"
+    "fetch_errors",  # failed attempts to download the job page (not retried after 3)
 ]
 
 DERIVED_FIELDS = [
@@ -29,6 +30,9 @@ DERIVED_FIELDS = [
     # True when the listing shows no salary ("a combinar") but the job page has a
     # salary range: the range is an estimate made by the site, not the employer's offer.
     "salary_estimated",
+    # True when the job page was downloaded and had the site's structured job data
+    # (JobPosting): publication date, company etc. confirmed on the site itself.
+    "validated",
 ]
 
 JOB_FIELDS = LISTING_FIELDS + TRACKING_FIELDS + DETAIL_FIELDS + DERIVED_FIELDS
@@ -105,6 +109,54 @@ def save_jobs(data_folder: str, jobs: dict[str, dict]) -> str:
         for job in jobs.values():
             if job.get("details_fetched_at"):
                 job["salary_estimated"] = bool(job.get("salary_max")) and not job.get("salary")
+            job["validated"] = bool(job.get("date_posted"))
             writer.writerow(job)
     os.replace(tmp_path, path)
     return path
+
+
+def _min_filled(*values: str) -> str:
+    return min((v for v in values if v), default="")
+
+
+def merge_jobs(base: dict[str, dict], partials: list[dict[str, dict]]) -> dict[str, dict]:
+    """
+    Merges the vagas.csv of parallel collections (each one started from base)
+    into base. Nothing is removed: a job present in any input is in the result.
+
+    For a job present in more than one input:
+        - first dates (first_seen, details_fetched_at, closed_detected_at) take the earliest;
+        - last dates (last_seen, last_checked_at) take the latest;
+        - listing fields come from the input that saw the job last in the listing;
+        - details come from the first input that has them (details collected while
+          the job was open are never replaced by an empty closed page);
+        - "closed" comes from the most recent visit.
+    """
+    merged = {job_id: dict(job) for job_id, job in base.items()}
+    for partial in partials:
+        for job_id, new in partial.items():
+            old = merged.get(job_id)
+            if old is None:
+                merged[job_id] = dict(new)
+                continue
+            job = dict(old)
+            if (new.get("last_seen") or "") > (old.get("last_seen") or ""):
+                job.update({field: new.get(field, "") for field in LISTING_FIELDS})
+            job["first_seen"] = _min_filled(old.get("first_seen"), new.get("first_seen"))
+            job["last_seen"] = max(old.get("last_seen") or "", new.get("last_seen") or "")
+            if not old.get("date_posted") and new.get("date_posted"):
+                job.update({field: new.get(field, "") for field in DETAIL_FIELDS})
+            job["details_fetched_at"] = _min_filled(old.get("details_fetched_at"), new.get("details_fetched_at"))
+            if (new.get("last_checked_at") or "") > (old.get("last_checked_at") or ""):
+                job["last_checked_at"] = new["last_checked_at"]
+                job["closed"] = new.get("closed", "")
+            job["closed_detected_at"] = _min_filled(old.get("closed_detected_at"), new.get("closed_detected_at"))
+            job["fetch_errors"] = str(max(int(old.get("fetch_errors") or 0), int(new.get("fetch_errors") or 0)) or "")
+            merged[job_id] = job
+    return merged
+
+
+def load_jobs_file(path: str) -> dict[str, dict]:
+    """Loads any CSV with the vagas.csv columns as {job_id: row}."""
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        return {row["job_id"]: {field: row.get(field, "") for field in JOB_FIELDS} for row in csv.DictReader(f)}
