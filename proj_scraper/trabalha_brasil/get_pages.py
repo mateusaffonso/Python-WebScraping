@@ -143,7 +143,9 @@ def get_pages(
                 break
             full_page_url = build_listing_url(base_url, page_number, order)
             page_str = _get_listing_page(scraper, full_page_url, page_number, job_marker, retry=previous_page_full)
-            if job_marker not in page_str:
+            # A page can contain the marker (e.g. in a "related jobs" block or a CSS
+            # class) without any job card: the cards (data-job-url) are what counts.
+            if job_marker not in page_str or not _job_ids_in_page(page_str):
                 print(f"Page {page_number} has no jobs: end of the listing.")
                 stop_reason = "end"
                 break
@@ -199,7 +201,7 @@ def _get_listing_page(scraper, url: str, page_number: int, job_marker: str, retr
             page_str, error = scraper.get_page(url) or "", None
         except Exception as e:
             page_str, error = "", e
-        if job_marker in page_str:
+        if job_marker in page_str and _job_ids_in_page(page_str):
             return page_str
     if error is not None and not page_str:
         raise RuntimeError(f"Failed to get page {page_number}: {error}")

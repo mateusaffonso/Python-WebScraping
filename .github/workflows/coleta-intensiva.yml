@@ -40,6 +40,10 @@ env:
   HAS_DRIVE: ${{ secrets.RCLONE_CONFIG != '' }}
   DATA: ${{ github.workspace }}/coleta
   TZ: America/Sao_Paulo
+  # Mostra o log ao vivo no GitHub (sem isso o Python só escreve em blocos).
+  PYTHONUNBUFFERED: "1"
+  # Até quando uma execução dispara a seguinte ao terminar (horário de Brasília).
+  CONTINUAR_ATE: ${{ vars.COLETA_INTENSIVA_ATE || '2026-10-08T00:00' }}
   N_SHARDS: "4"
   MIN_JOB_ID: ${{ inputs.min_job_id || '13605000' }}
   LISTING_MINUTES: ${{ inputs.listing_minutes || '100' }}
@@ -122,6 +126,9 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write  # só para disparar a próxima execução (passo final)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -147,12 +154,32 @@ jobs:
           rclone copy "${REMOTE}parciais/" "$DATA/parciais/" --include "${GITHUB_RUN_ID}_*"
           ls "$DATA/parciais" | grep -q . || { echo "Nenhuma parte para juntar."; exit 0; }
           python proj_scraper/run.py trabalha-brasil merge --data-folder "$DATA" "$DATA"/parciais/*.csv 2>&1 | tee "$DATA/juntar.log"
-          python - <<'PY'
-          import csv, os
+          python - <<'PY' 2>&1 | tee -a "$DATA/juntar.log"
+          import collections, csv, os
           rows = list(csv.DictReader(open(os.path.join(os.environ["DATA"], "vagas.csv"), encoding="utf-8-sig")))
-          print(f"Total: {len(rows)} | validadas no site: {sum(r['validated'] == 'True' for r in rows)} | "
-                f"encerradas detectadas: {sum(1 for r in rows if r['closed_detected_at'])}")
+          ok = [r for r in rows if r["validated"] == "True"]
+          print(f"Total: {len(rows)} | validadas no site: {len(ok)} | sem detalhes ainda: "
+                f"{sum(1 for r in rows if not r['details_fetched_at'])} | encerradas detectadas: "
+                f"{sum(1 for r in rows if r['closed_detected_at'])}")
+          days = collections.Counter(r["date_posted"][:10] for r in ok)
+          print("Validadas por data de publicação (últimos 45 dias):")
+          for day in sorted(days)[-45:]:
+              print(f"  {day}: {days[day]}")
+          print("UFs:", ", ".join(f"{k or '?'} {v}" for k, v in collections.Counter(r["state"] for r in ok).most_common(27)))
           PY
           rclone copyto "$DATA/vagas.csv" "${REMOTE}vagas.csv"
           rclone copyto "$DATA/juntar.log" "${REMOTE}logs/$(date +%F)_${GITHUB_RUN_ID}_juntar.log"
           echo "vagas.csv atualizado no Drive."
+
+      - name: Dispara a próxima execução
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          AGORA=$(date +%Y-%m-%dT%H:%M)
+          if [[ "$AGORA" < "$CONTINUAR_ATE" ]]; then
+            gh workflow run coleta-intensiva.yml --repo "$GITHUB_REPOSITORY" --ref main
+            echo "Próxima execução disparada (continua até $CONTINUAR_ATE)."
+          else
+            echo "Fim do período da coleta intensiva ($CONTINUAR_ATE): nada disparado."
+          fi
